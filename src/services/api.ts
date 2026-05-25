@@ -86,10 +86,12 @@ export async function testConnection(config: ApiConfig): Promise<TestResult> {
 /**
  * 调用 LLM 批改作文。返回结构化 GradeResult。
  * 失败时抛 ApiError，调用方根据 kind 给出友好提示。
+ * signal: 可选 AbortSignal，超时或用户取消时中断请求。
  */
 export async function gradeEssay(
   config: ApiConfig,
   params: { topic: string; requirements: string; studentEssay: string },
+  signal?: AbortSignal,
 ): Promise<GradeResult> {
   const url = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`
   const prompt = buildGradePrompt({
@@ -113,8 +115,12 @@ export async function gradeEssay(
         // 注：部分模型/网关支持 response_format 强制 JSON，不支持的会忽略此字段。
         response_format: { type: 'json_object' },
       }),
+      signal,
     })
   } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new ApiError('network', '请求已取消')
+    }
     const msg = e instanceof Error ? e.message : String(e)
     throw new ApiError('network', `网络错误：${msg}`)
   }

@@ -1,14 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Sparkles, Loader2, AlertCircle, Wand2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  Sparkles,
+  Loader2,
+  AlertCircle,
+  Wand2,
+  Camera,
+  Mic,
+  MicOff,
+  X,
+} from 'lucide-react'
 import Collapsible from '../components/Collapsible'
 import { findTopic } from '../data/topics'
 import { useConfigStore } from '../store/configStore'
 import { gradeEssay, generateTopic, ApiError, type GeneratedTopic } from '../services/api'
+import { recognizeImage, type OcrProgress } from '../services/ocr'
+import {
+  startListening,
+  ensurePermission as ensureSpeechPermission,
+  isAvailable as isSpeechAvailable,
+  type SpeechHandle,
+} from '../services/speech'
 import { db } from '../db'
 
 const WORD_MIN = 80
 const WORD_MAX = 100
+const GRADE_TIMEOUT_MS = 60_000
 
 function countWords(s: string): number {
   return s.trim().split(/\s+/).filter(Boolean).length
@@ -29,11 +47,23 @@ export default function Writing() {
   const [submitting, setSubmitting] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [timeoutOpen, setTimeoutOpen] = useState(false)
   // AI 生成题目（仅在自定义模式下使用）
   const [genTopic, setGenTopic] = useState<GeneratedTopic | null>(null)
   const [generating, setGenerating] = useState(false)
 
-  // 题目要求 textarea 自动伸高（短内容收紧，长内容展开至最高约 10 行后内部滚动）
+  // OCR 拍照
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [ocrBusy, setOcrBusy] = useState(false)
+  const [ocrProgress, setOcrProgress] = useState(0)
+  const [ocrPreview, setOcrPreview] = useState<string | null>(null)
+
+  // 语音识别
+  const [listening, setListening] = useState(false)
+  const [partialText, setPartialText] = useState('')
+  const speechRef = useRef<SpeechHandle | null>(null)
+
+  // 题目要求 textarea 自动伸高
   const reqRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     const el = reqRef.current
@@ -42,6 +72,7 @@ export default function Writing() {
     el.style.height = Math.min(el.scrollHeight, 240) + 'px'
   }, [requirements])
 
+  // 批改计时 + 60s 超时
   useEffect(() => {
     if (!submitting) {
       setElapsed(0)
@@ -52,7 +83,7 @@ export default function Writing() {
     return () => window.clearInterval(id)
   }, [submitting])
 
-  // 进入时加载草稿（仅在 essay 仍为空时覆盖，避免和预填的 title/requirements 冲突时丢内容）
+  // 进入时加载草稿
   useEffect(() => {
     const saved = localStorage.getItem(draftKey)
     if (!saved) return
@@ -74,10 +105,23 @@ export default function Writing() {
     return () => window.clearTimeout(t)
   }, [draftKey, title, requirements, essay])
 
+  // 卸载时停止语音
+  useEffect(() => {
+    return () => {
+      if (speechRef.current) {
+        speechRef.current.stop().catch(() => {})
+        speechRef.current = null
+      }
+    }
+  }, [])
+
   const words = countWords(essay)
   const wordOk = words >= WORD_MIN && words <= WORD_MAX
   const wordTooShort = words < WORD_MIN
   const wordColor = wordOk ? 'text-primary-600' : wordTooShort ? 'text-gray-500' : 'text-amber-600'
+
+  // 提交批改时锁定整个页面（除了取消按钮）
+  const locked = submitting
 
   const handleGenerate = async () => {
     setError(null)
@@ -116,13 +160,29 @@ export default function Writing() {
       setError(`作文太短（仅 ${words} 词），至少写 20 词再提交批改`)
       return
     }
+    // 提交前先关掉语音（避免后台占麦克风）
+    if (speechRef.current) {
+      await speechRef.current.stop().catch(() => {})
+      speechRef.current = null
+      setListening(false)
+      setPartialText('')
+    }
     setSubmitting(true)
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), GRADE_TIMEOUT_MS)
+
     try {
-      const result = await gradeEssay(config, {
-        topic: title.trim(),
-        requirements: requirements.trim(),
-        studentEssay: essay.trim(),
-      })
+      const result = await gradeEssay(
+        config,
+        {
+          topic: title.trim(),
+          requirements: requirements.trim(),
+          studentEssay: essay.trim(),
+        },
+        controller.signal,
+      )
+      window.clearTimeout(timer)
       const id = await db.essays.add({
         topicId,
         topic: title.trim(),
@@ -134,7 +194,10 @@ export default function Writing() {
       localStorage.removeItem(draftKey)
       navigate(`/result/${id}`, { replace: true })
     } catch (e) {
-      if (e instanceof ApiError) {
+      window.clearTimeout(timer)
+      if (controller.signal.aborted) {
+        setTimeoutOpen(true)
+      } else if (e instanceof ApiError) {
         setError(e.message)
       } else {
         setError(e instanceof Error ? e.message : String(e))
@@ -144,10 +207,95 @@ export default function Writing() {
     }
   }
 
+  // ============ 拍照 OCR ============
+  const handlePickPhoto = () => {
+    if (locked || ocrBusy) return
+    fileInputRef.current?.click()
+  }
+
+  const handlePhotoChange: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setError(null)
+    setOcrBusy(true)
+    setOcrProgress(0)
+    try {
+      const text = await recognizeImage(file, (p: OcrProgress) => {
+        if (p.status === 'recognizing text') setOcrProgress(Math.round(p.progress * 100))
+      })
+      if (!text) {
+        setError('图片识别为空，换一张更清晰的图片再试')
+      } else {
+        setOcrPreview(text)
+      }
+    } catch (err) {
+      setError('OCR 识别失败：' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setOcrBusy(false)
+      setOcrProgress(0)
+    }
+  }
+
+  const insertOcrText = (text: string) => {
+    setEssay((prev) => {
+      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
+      return prev + sep + text
+    })
+    setOcrPreview(null)
+  }
+
+  // ============ 语音输入 ============
+  const handleToggleMic = async () => {
+    if (locked || ocrBusy) return
+    if (listening) {
+      const handle = speechRef.current
+      speechRef.current = null
+      setListening(false)
+      setPartialText('')
+      if (handle) await handle.stop().catch(() => {})
+      return
+    }
+    setError(null)
+    try {
+      const avail = await isSpeechAvailable()
+      if (!avail) {
+        setError('当前设备不支持语音识别（请安装/启用 Google 语音服务或换用其他输入法）')
+        return
+      }
+      const ok = await ensureSpeechPermission()
+      if (!ok) {
+        setError('未授权麦克风权限，无法语音输入')
+        return
+      }
+      setListening(true)
+      const handle = await startListening((text, isFinal) => {
+        if (isFinal) {
+          setEssay((prev) => {
+            const sep = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : ''
+            return prev + sep + text
+          })
+          setPartialText('')
+        } else {
+          setPartialText(text)
+        }
+      })
+      speechRef.current = handle
+    } catch (err) {
+      setListening(false)
+      setError('启动语音识别失败：' + (err instanceof Error ? err.message : String(err)))
+    }
+  }
+
   return (
     <div className="px-4 pt-3 pb-32">
       <div className="mb-2 flex items-center justify-between">
-        <Link to="/" className="-ml-1 inline-flex items-center gap-1 p-1 text-gray-600 active:text-gray-800">
+        <Link
+          to="/"
+          className={`-ml-1 inline-flex items-center gap-1 p-1 text-gray-600 active:text-gray-800 ${
+            locked ? 'pointer-events-none opacity-40' : ''
+          }`}
+        >
           <ArrowLeft className="h-5 w-5" />
           <span className="text-sm">返回</span>
         </Link>
@@ -161,7 +309,7 @@ export default function Writing() {
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={generating || submitting}
+              disabled={generating || locked}
               className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-[11px] font-medium text-primary-700 ring-1 ring-primary-100 active:bg-primary-100 disabled:opacity-60"
             >
               {generating ? (
@@ -182,7 +330,7 @@ export default function Writing() {
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          disabled={submitting}
+          disabled={locked}
           placeholder="如 My Best Friend"
           className="mt-1 w-full border-0 border-b border-gray-200 bg-transparent px-0 py-2 text-base font-medium text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-0 disabled:opacity-60"
         />
@@ -191,7 +339,7 @@ export default function Writing() {
           ref={reqRef}
           value={requirements}
           onChange={(e) => setRequirements(e.target.value)}
-          disabled={submitting}
+          disabled={locked}
           placeholder={topic ? '可选。粘贴试卷上的题目要求（中英文均可）。' : '可手写题目要求，或点击右上角「AI 生成题目」按江苏中考高频考点自动生成。'}
           rows={2}
           style={{ maxHeight: '240px' }}
@@ -233,17 +381,77 @@ export default function Writing() {
       )}
 
       <section className="mt-3 rounded-2xl bg-white p-4 ring-1 ring-gray-100">
-        <label className="block text-xs font-medium text-gray-500">作文正文</label>
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-medium text-gray-500">作文正文</label>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handlePickPhoto}
+              disabled={locked || ocrBusy || listening}
+              className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-700 ring-1 ring-gray-200 active:bg-gray-100 disabled:opacity-50"
+              aria-label="拍照识别"
+            >
+              {ocrBusy ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  识别中 {ocrProgress}%
+                </>
+              ) : (
+                <>
+                  <Camera className="h-3 w-3" />
+                  拍照
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={handleToggleMic}
+              disabled={locked || ocrBusy}
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 active:opacity-80 disabled:opacity-50 ${
+                listening
+                  ? 'bg-red-50 text-red-700 ring-red-200'
+                  : 'bg-gray-50 text-gray-700 ring-gray-200'
+              }`}
+              aria-label={listening ? '停止语音' : '语音输入'}
+            >
+              {listening ? (
+                <>
+                  <MicOff className="h-3 w-3" />
+                  停止
+                </>
+              ) : (
+                <>
+                  <Mic className="h-3 w-3" />
+                  语音
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handlePhotoChange}
+        />
         <textarea
           value={essay}
           onChange={(e) => setEssay(e.target.value)}
-          disabled={submitting}
+          disabled={locked}
           placeholder={'开始写吧…\n建议 80–100 词，分 3 段。'}
           rows={14}
           className="mt-1 w-full resize-y border-0 bg-transparent px-0 py-2 text-[15px] leading-relaxed text-gray-900 focus:outline-none focus:ring-0 disabled:opacity-60"
           autoCapitalize="sentences"
           spellCheck
         />
+        {listening && (
+          <div className="mt-1 rounded-lg border border-red-100 bg-red-50/60 px-2 py-1 text-[12px] text-red-700">
+            <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-red-500 align-middle"></span>
+            正在听… {partialText && <span className="italic text-red-800/80">{partialText}</span>}
+          </div>
+        )}
       </section>
 
       {error && (
@@ -259,7 +467,9 @@ export default function Writing() {
             {submitting ? (
               <>
                 <div className="font-medium text-primary-700">AI 正在批改…</div>
-                <div className="text-[11px] text-gray-400">已用 {elapsed} 秒，请稍候（通常 5–20 秒）</div>
+                <div className="text-[11px] text-gray-400">
+                  已用 {elapsed} 秒（最多 {GRADE_TIMEOUT_MS / 1000} 秒，超时自动取消）
+                </div>
               </>
             ) : (
               <>
@@ -292,6 +502,95 @@ export default function Writing() {
             )}
           </button>
         </div>
+      </div>
+
+      {/* 批改时的全屏遮罩 —— 锁定误触 */}
+      {submitting && (
+        <div
+          className="fixed inset-0 z-30 bg-black/5"
+          // 拦截点击 / 触摸事件，避免冒泡到下层按钮
+          onClick={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* OCR 预览插入对话框 */}
+      {ocrPreview !== null && (
+        <Modal title="识别结果（可编辑后插入）" onClose={() => setOcrPreview(null)}>
+          <p className="text-[11px] text-gray-500">
+            手写识别结果仅供参考，建议核对后再插入；将追加到正文末尾。
+          </p>
+          <textarea
+            value={ocrPreview}
+            onChange={(e) => setOcrPreview(e.target.value)}
+            rows={8}
+            className="mt-2 w-full resize-y rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm leading-relaxed text-gray-800 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-200"
+          />
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setOcrPreview(null)}
+              className="rounded-lg px-3 py-1.5 text-sm text-gray-600 active:bg-gray-100"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => insertOcrText(ocrPreview)}
+              className="rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-medium text-white active:bg-primary-800"
+            >
+              插入正文
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 批改超时对话框 */}
+      {timeoutOpen && (
+        <Modal title="AI 响应超时" onClose={() => setTimeoutOpen(false)}>
+          <p className="text-sm text-gray-700">
+            {GRADE_TIMEOUT_MS / 1000} 秒内未收到批改结果，已自动取消请求。可能是网络拥堵或模型负载较高，请稍后再试。
+          </p>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setTimeoutOpen(false)}
+              className="rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-medium text-white active:bg-primary-800"
+            >
+              知道了
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center">
+      <div className="mx-3 mb-3 w-full max-w-md rounded-2xl bg-white p-4 shadow-xl sm:mb-0">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-sm font-medium text-gray-900">{title}</div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-1 text-gray-400 active:bg-gray-100"
+            aria-label="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {children}
       </div>
     </div>
   )
