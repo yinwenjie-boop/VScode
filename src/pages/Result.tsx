@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import {
-  ArrowLeft, Sparkles, RefreshCw, Home as HomeIcon, Copy, Check, Quote, Lightbulb, Target,
+  ArrowLeft, Sparkles, RefreshCw, Home as HomeIcon, Copy, Check, Quote, Lightbulb, Target, FileText,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import RingProgress from '../components/RingProgress'
@@ -94,6 +94,25 @@ export default function Result() {
           ))}
         </div>
       </section>
+
+      <SectionCard
+        title="我的原作文"
+        icon={<FileText className="h-4 w-4" />}
+        right={<CopyButton text={record.content} />}
+      >
+        {record.requirements && (
+          <div className="mb-2 whitespace-pre-line rounded-lg bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-900 ring-1 ring-amber-100">
+            <span className="font-medium">题目要求：</span>
+            {record.requirements}
+          </div>
+        )}
+        <div className="whitespace-pre-line rounded-xl bg-gray-50 p-3 text-[13px] leading-relaxed text-gray-800">
+          {record.content}
+        </div>
+        <div className="mt-1.5 text-[11px] text-gray-400">
+          原文共 {wordCount(record.content)} 词
+        </div>
+      </SectionCard>
 
       <SectionCard title="整体评语" icon={<Quote className="h-4 w-4" />}>
         <div className="markdown-body text-[13px] leading-relaxed text-gray-700">
@@ -236,6 +255,10 @@ function CopyButton({ text }: { text: string }) {
       {done ? '已复制' : '复制'}
     </button>
   )
+}
+
+function wordCount(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length
 }
 
 function scoreVerdict(s: number): string {

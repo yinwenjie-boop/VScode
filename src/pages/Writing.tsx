@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Sparkles, Loader2, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Sparkles, Loader2, AlertCircle, Wand2 } from 'lucide-react'
 import Collapsible from '../components/Collapsible'
 import { findTopic } from '../data/topics'
 import { useConfigStore } from '../store/configStore'
-import { gradeEssay, ApiError } from '../services/api'
+import { gradeEssay, generateTopic, ApiError, type GeneratedTopic } from '../services/api'
 import { db } from '../db'
 
 const WORD_MIN = 80
@@ -29,6 +29,9 @@ export default function Writing() {
   const [submitting, setSubmitting] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // AI 生成题目（仅在自定义模式下使用）
+  const [genTopic, setGenTopic] = useState<GeneratedTopic | null>(null)
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     if (!submitting) {
@@ -66,6 +69,29 @@ export default function Writing() {
   const wordOk = words >= WORD_MIN && words <= WORD_MAX
   const wordTooShort = words < WORD_MIN
   const wordColor = wordOk ? 'text-primary-600' : wordTooShort ? 'text-gray-500' : 'text-amber-600'
+
+  const handleGenerate = async () => {
+    setError(null)
+    if (!isConfigured()) {
+      setError('请先到「设置」页配置 API（Base URL / Key / 模型）')
+      return
+    }
+    setGenerating(true)
+    try {
+      const t = await generateTopic(config)
+      setGenTopic(t)
+      setTitle(t.englishTitle)
+      setRequirements(t.requirements)
+    } catch (e) {
+      if (e instanceof ApiError) {
+        setError(e.message)
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   const handleSubmit = async () => {
     setError(null)
@@ -120,7 +146,29 @@ export default function Writing() {
       </div>
 
       <section className="rounded-2xl bg-white p-4 ring-1 ring-gray-100">
-        <label className="block text-xs font-medium text-gray-500">作文题目</label>
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-medium text-gray-500">作文题目</label>
+          {!topic && (
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={generating || submitting}
+              className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-[11px] font-medium text-primary-700 ring-1 ring-primary-100 active:bg-primary-100 disabled:opacity-60"
+            >
+              {generating ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  生成中…
+                </>
+              ) : (
+                <>
+                  <Wand2 className="h-3 w-3" />
+                  AI 生成题目
+                </>
+              )}
+            </button>
+          )}
+        </div>
         <input
           type="text"
           value={title}
@@ -134,10 +182,15 @@ export default function Writing() {
           value={requirements}
           onChange={(e) => setRequirements(e.target.value)}
           disabled={submitting}
-          placeholder="可选。粘贴试卷上的题目要求（中英文均可）。"
+          placeholder={topic ? '可选。粘贴试卷上的题目要求（中英文均可）。' : '可手写题目要求，或点击右上角「AI 生成题目」按江苏中考高频考点自动生成。'}
           rows={3}
           className="mt-1 w-full resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-60"
         />
+        {!topic && genTopic && (
+          <div className="mt-2 text-[11px] text-primary-700">
+            AI 已按江苏中考高频考点生成题目：<span className="font-medium">{genTopic.title}</span>
+          </div>
+        )}
       </section>
 
       {topic && (
@@ -150,6 +203,20 @@ export default function Writing() {
             <GuideBlock label="审题" content={topic.guidance.analysis} />
             <GuideBlock label="思路框架" content={topic.guidance.structure} />
             <GuideBlock label="推荐词汇 / 句型" content={topic.guidance.vocabulary} mono />
+          </Collapsible>
+        </div>
+      )}
+
+      {!topic && genTopic && (
+        <div className="mt-3">
+          <Collapsible
+            title="写作引导（AI 生成）"
+            defaultOpen
+            rightSlot={<span className="text-[10px] text-primary-700">江苏高频</span>}
+          >
+            <GuideBlock label="审题" content={genTopic.guidance.analysis} />
+            <GuideBlock label="思路框架" content={genTopic.guidance.structure} />
+            <GuideBlock label="推荐词汇 / 句型" content={genTopic.guidance.vocabulary} mono />
           </Collapsible>
         </div>
       )}

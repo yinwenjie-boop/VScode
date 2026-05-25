@@ -1,5 +1,16 @@
 import type { ApiConfig, GradeResult, SentenceFeedback } from '../types'
-import { buildGradePrompt } from './prompt'
+import { buildGradePrompt, buildTopicGenPrompt } from './prompt'
+
+export interface GeneratedTopic {
+  title: string
+  englishTitle: string
+  requirements: string
+  guidance: {
+    analysis: string
+    structure: string
+    vocabulary: string
+  }
+}
 
 export type TestResult =
   | { ok: true; sample: string }
@@ -135,6 +146,102 @@ export async function gradeEssay(
   const parsed = parseGradeJson(content)
   if (!parsed) throw new ApiError('format', 'AI 未按要求的 JSON 格式输出，请重试或更换模型')
   return parsed
+}
+
+/**
+ * 让 LLM 命制一道江苏中考高频英语作文题。返回结构化 GeneratedTopic。
+ * 失败时抛 ApiError。
+ */
+export async function generateTopic(config: ApiConfig): Promise<GeneratedTopic> {
+  const url = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`
+  const prompt = buildTopicGenPrompt()
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.9,
+        response_format: { type: 'json_object' },
+      }),
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    throw new ApiError('network', `网络错误：${msg}`)
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    if (res.status === 401 || res.status === 403) {
+      throw new ApiError('auth', `认证失败（HTTP ${res.status}）：API Key 错误或权限不足`)
+    }
+    if (res.status === 404) {
+      throw new ApiError('endpoint', `接口不存在（HTTP 404）：请检查 Base URL`)
+    }
+    throw new ApiError('http', `HTTP ${res.status}：${text.slice(0, 300) || '无返回内容'}`)
+  }
+
+  let data: unknown
+  try {
+    data = await res.json()
+  } catch {
+    throw new ApiError('format', '返回内容不是合法 JSON')
+  }
+  const content = (data as { choices?: { message?: { content?: string } }[] })
+    ?.choices?.[0]?.message?.content
+  if (typeof content !== 'string') {
+    throw new ApiError('format', '返回结构异常：缺少 choices[0].message.content')
+  }
+
+  const parsed = parseGeneratedTopic(content)
+  if (!parsed) throw new ApiError('format', 'AI 未按要求的 JSON 格式输出，请重试或更换模型')
+  return parsed
+}
+
+function parseGeneratedTopic(raw: string): GeneratedTopic | null {
+  let s = raw.trim()
+  if (s.startsWith('```')) {
+    s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '')
+  }
+  const start = s.indexOf('{')
+  const end = s.lastIndexOf('}')
+  if (start >= 0 && end > start) s = s.slice(start, end + 1)
+  let obj: unknown
+  try {
+    obj = JSON.parse(s)
+  } catch {
+    return null
+  }
+  if (!obj || typeof obj !== 'object') return null
+  const o = obj as Record<string, unknown>
+  const g = o.guidance as Record<string, unknown> | undefined
+  if (
+    typeof o.title !== 'string' ||
+    typeof o.englishTitle !== 'string' ||
+    typeof o.requirements !== 'string' ||
+    !g ||
+    typeof g.analysis !== 'string' ||
+    typeof g.structure !== 'string' ||
+    typeof g.vocabulary !== 'string'
+  ) {
+    return null
+  }
+  return {
+    title: o.title,
+    englishTitle: o.englishTitle,
+    requirements: o.requirements,
+    guidance: {
+      analysis: g.analysis,
+      structure: g.structure,
+      vocabulary: g.vocabulary,
+    },
+  }
 }
 
 function parseGradeJson(raw: string): GradeResult | null {
