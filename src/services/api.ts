@@ -63,7 +63,7 @@ export async function testConnection(config: ApiConfig): Promise<TestResult> {
       return { ok: false, error: `认证失败（HTTP ${res.status}）：API Key 错误或权限不足` }
     }
     if (res.status === 404) {
-      return { ok: false, error: `接口不存在（HTTP 404）：请检查 Base URL（应以 /v1 结尾）和模型名是否正确` }
+      return { ok: false, error: `接口不存在（HTTP 404）：请检查 Base URL 和模型名是否正确` }
     }
     return { ok: false, error: `HTTP ${res.status}：${text.slice(0, 300) || '无返回内容'}` }
   }

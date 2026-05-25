@@ -6,6 +6,9 @@ import type { Provider, TargetLevel } from '../types'
 
 const PROVIDERS: Provider[] = ['deepseek', 'claude', 'openai', 'kimi', 'qwen', 'custom']
 
+const DEEPSEEK_MODEL_PRESETS = ['deepseek-v4-pro', 'deepseek-v4-flash'] as const
+const CUSTOM_MODEL_SENTINEL = '__custom__'
+
 const LEVELS: { value: TargetLevel; label: string; hint: string }[] = [
   { value: 'excellent', label: '13–15 优秀', hint: '严格批改，向高分作文看齐' },
   { value: 'good',      label: '10–12 良好', hint: '常规标准，找出主要问题' },
@@ -108,15 +111,51 @@ export default function Settings() {
         </Field>
 
         <Field label="模型名称">
-          <input
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            value={config.model}
-            onChange={(e) => setConfig({ model: e.target.value })}
-            placeholder="deepseek-chat / gpt-4o-mini / ..."
-            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
-          />
+          {config.provider === 'deepseek' ? (
+            (() => {
+              const isCustom = !DEEPSEEK_MODEL_PRESETS.includes(
+                config.model as typeof DEEPSEEK_MODEL_PRESETS[number],
+              )
+              return (
+                <>
+                  <select
+                    value={isCustom ? CUSTOM_MODEL_SENTINEL : config.model}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setConfig({ model: v === CUSTOM_MODEL_SENTINEL ? '' : v })
+                    }}
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                  >
+                    {DEEPSEEK_MODEL_PRESETS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value={CUSTOM_MODEL_SENTINEL}>自定义</option>
+                  </select>
+                  {isCustom && (
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={config.model}
+                      onChange={(e) => setConfig({ model: e.target.value })}
+                      placeholder="输入自定义模型名"
+                      className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                    />
+                  )}
+                </>
+              )
+            })()
+          ) : (
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              value={config.model}
+              onChange={(e) => setConfig({ model: e.target.value })}
+              placeholder="gpt-4o-mini / claude-3-5-sonnet / ..."
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+            />
+          )}
         </Field>
       </section>
 

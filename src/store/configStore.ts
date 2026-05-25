@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { ApiConfig, Provider } from '../types'
 
 export const PROVIDER_PRESETS: Record<Provider, { label: string; baseUrl: string; model: string }> = {
-  deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
   claude:   { label: 'Claude',   baseUrl: 'https://api.anthropic.com/v1', model: 'claude-3-5-sonnet-20241022' },
   openai:   { label: 'OpenAI',   baseUrl: 'https://api.openai.com/v1',    model: 'gpt-4o-mini' },
   kimi:     { label: 'Kimi (Moonshot)', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
