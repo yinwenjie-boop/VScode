@@ -2,18 +2,12 @@ import { useState } from 'react'
 import { Eye, EyeOff, ShieldCheck, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { useConfigStore, PROVIDER_PRESETS } from '../store/configStore'
 import { testConnection } from '../services/api'
-import type { Provider, TargetLevel } from '../types'
+import type { Provider } from '../types'
 
 const PROVIDERS: Provider[] = ['deepseek', 'claude', 'openai', 'kimi', 'qwen', 'custom']
 
 const DEEPSEEK_MODEL_PRESETS = ['deepseek-v4-pro', 'deepseek-v4-flash'] as const
 const CUSTOM_MODEL_SENTINEL = '__custom__'
-
-const LEVELS: { value: TargetLevel; label: string; hint: string }[] = [
-  { value: 'excellent', label: '13–15 优秀', hint: '严格批改，向高分作文看齐' },
-  { value: 'good',      label: '10–12 良好', hint: '常规标准，找出主要问题' },
-  { value: 'pass',      label: '7–9 及格',   hint: '宽松批改，鼓励为主' },
-]
 
 type TestState =
   | { kind: 'idle' }
@@ -157,36 +151,6 @@ export default function Settings() {
             />
           )}
         </Field>
-      </section>
-
-      <section className="mt-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
-        <div className="mb-2 text-sm font-medium text-gray-900">目标分数档位</div>
-        <p className="mb-3 text-xs text-gray-500">影响 AI 批改的严格程度（中考英语作文满分 15）。</p>
-        <div className="space-y-2">
-          {LEVELS.map((lv) => (
-            <label
-              key={lv.value}
-              className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${
-                config.targetLevel === lv.value
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-200 bg-white hover:border-gray-300'
-              }`}
-            >
-              <input
-                type="radio"
-                name="targetLevel"
-                value={lv.value}
-                checked={config.targetLevel === lv.value}
-                onChange={() => setConfig({ targetLevel: lv.value })}
-                className="mt-0.5 h-4 w-4 accent-primary-600"
-              />
-              <div className="flex-1">
-                <div className="text-sm font-medium text-gray-900">{lv.label}</div>
-                <div className="text-xs text-gray-500">{lv.hint}</div>
-              </div>
-            </label>
-          ))}
-        </div>
       </section>
 
       <div className="mt-5 flex gap-3">

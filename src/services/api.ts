@@ -96,7 +96,6 @@ export async function gradeEssay(
     topic: params.topic,
     requirements: params.requirements,
     studentEssay: params.studentEssay,
-    targetLevel: config.targetLevel,
   })
 
   let res: Response

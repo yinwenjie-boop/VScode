@@ -1,13 +1,10 @@
 export type Provider = 'deepseek' | 'claude' | 'openai' | 'kimi' | 'qwen' | 'custom'
 
-export type TargetLevel = 'excellent' | 'good' | 'pass'
-
 export interface ApiConfig {
   provider: Provider
   baseUrl: string
   apiKey: string
   model: string
-  targetLevel: TargetLevel
 }
 
 export type FeedbackType = 'grammar' | 'word' | 'expression' | 'none'

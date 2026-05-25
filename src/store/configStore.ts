@@ -16,7 +16,6 @@ const DEFAULT_CONFIG: ApiConfig = {
   baseUrl: PROVIDER_PRESETS.deepseek.baseUrl,
   apiKey: '',
   model: PROVIDER_PRESETS.deepseek.model,
-  targetLevel: 'good',
 }
 
 interface ConfigState {
