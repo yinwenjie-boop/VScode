@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { ArrowLeft, Sparkles, Loader2, AlertCircle, Wand2 } from 'lucide-react'
 import Collapsible from '../components/Collapsible'
@@ -32,6 +32,15 @@ export default function Writing() {
   // AI 生成题目（仅在自定义模式下使用）
   const [genTopic, setGenTopic] = useState<GeneratedTopic | null>(null)
   const [generating, setGenerating] = useState(false)
+
+  // 题目要求 textarea 自动伸高（短内容收紧，长内容展开至最高约 10 行后内部滚动）
+  const reqRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    const el = reqRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 240) + 'px'
+  }, [requirements])
 
   useEffect(() => {
     if (!submitting) {
@@ -179,12 +188,14 @@ export default function Writing() {
         />
         <label className="mt-3 block text-xs font-medium text-gray-500">题目要求</label>
         <textarea
+          ref={reqRef}
           value={requirements}
           onChange={(e) => setRequirements(e.target.value)}
           disabled={submitting}
           placeholder={topic ? '可选。粘贴试卷上的题目要求（中英文均可）。' : '可手写题目要求，或点击右上角「AI 生成题目」按江苏中考高频考点自动生成。'}
-          rows={3}
-          className="mt-1 w-full resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-60"
+          rows={2}
+          style={{ maxHeight: '240px' }}
+          className="mt-1 w-full resize-none overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm leading-relaxed text-gray-700 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-60"
         />
         {!topic && genTopic && (
           <div className="mt-2 text-[11px] text-primary-700">
